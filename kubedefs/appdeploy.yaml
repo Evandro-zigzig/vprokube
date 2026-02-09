@@ -20,3 +20,36 @@ spec:
         ports:
         - name: vproapp-port
           containerPort: 8080
+        env:
+
+        - name: DB_HOST
+          value: vprodb
+        - name: DB_PORT
+          value: "3306"
+        - name: DB_USER
+          value: root
+        - name: DB_PASS
+          valueFrom:
+            secretKeyRef:
+              name: app-secret
+              key: db-pass
+        - name: RABBITMQ_HOST
+          value: vpromq01
+        - name: RABBITMQ_PORT
+          value: "5672"
+        - name: RABBITMQ_USER
+          valueFrom:
+            secretKeyRef:
+              name: app-secret
+              key: rmq-user
+        - name: RABBITMQ_PASS
+          valueFrom:
+            secretKeyRef:
+              name: app-secret
+              key: rmq-pass
+        - name: MEMCACHED_HOST
+          value: vprocache01
+        - name: MEMCACHED_PORT
+          value: "11211"
+        
+
