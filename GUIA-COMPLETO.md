@@ -2,10 +2,12 @@
 
 ## 📋 Pré-requisitos
 
-- Cluster Kubernetes configurado (EKS, GKE, AKS ou local com Minikube/Kind)
-- kubectl instalado e configurado
-- NGINX Ingress Controller instalado no cluster
-- Conhecimento básico de Kubernetes e Docker
+- AWS Account com credenciais configuradas
+- kubectl instalado
+- kops instalado
+- AWS CLI configurado
+- Domínio registrado (GoDaddy, Route53 ou outro provedor)
+- Conhecimento básico de Kubernetes, Docker e AWS
 
 ## 🏗️ Arquitetura do Projeto
 
@@ -49,6 +51,142 @@ vprokube/
 ---
 
 ## 🔧 Passo a Passo
+
+### **Passo 0: Criar Cluster Kubernetes na AWS com Kops**
+
+#### **0.1 - Instalar Kops**
+
+```bash
+# Linux
+curl -Lo kops https://github.com/kubernetes/kops/releases/download/$(curl -s https://api.github.com/repos/kubernetes/kops/releases/latest | grep tag_name | cut -d '"' -f 4)/kops-linux-amd64
+chmod +x kops
+sudo mv kops /usr/local/bin/kops
+
+# Verificar instalação
+kops version
+```
+
+#### **0.2 - Configurar AWS CLI**
+
+```bash
+# Configurar credenciais AWS
+aws configure
+
+# Criar bucket S3 para state do Kops
+aws s3api create-bucket \
+    --bucket kops-state-bucket-seu-nome \
+    --region us-east-1
+
+# Habilitar versionamento
+aws s3api put-bucket-versioning \
+    --bucket kops-state-bucket-seu-nome \
+    --versioning-configuration Status=Enabled
+
+# Exportar variável de ambiente
+export KOPS_STATE_STORE=s3://kops-state-bucket-seu-nome
+```
+
+#### **0.3 - Criar Cluster Kubernetes**
+
+```bash
+# Criar cluster
+kops create cluster \
+    --name=kubepro.adm-ops.online \
+    --state=s3://kops-state-bucket-seu-nome \
+    --zones=us-east-1a \
+    --node-count=2 \
+    --node-size=t3.medium \
+    --master-size=t3.medium \
+    --dns-zone=adm-ops.online \
+    --yes
+
+# Aguardar cluster ficar pronto (10-15 minutos)
+kops validate cluster --wait 10m
+
+# Verificar nodes
+kubectl get nodes
+```
+
+**Recursos criados na AWS:**
+- ✅ EC2 Instances (1 master + 2 workers)
+- ✅ VPC com subnets públicas e privadas
+- ✅ Auto Scaling Groups
+- ✅ Load Balancers
+- ✅ Security Groups
+- ✅ Route53 DNS records
+- ✅ EBS Volumes para persistência
+
+#### **0.4 - Instalar NGINX Ingress Controller**
+
+```bash
+# Instalar NGINX Ingress
+kubectl apply -f https://raw.githubusercontent.com/kubernetes/ingress-nginx/controller-v1.8.1/deploy/static/provider/aws/deploy.yaml
+
+# Verificar instalação
+kubectl get pods -n ingress-nginx
+
+# Obter Load Balancer URL
+kubectl get svc -n ingress-nginx
+```
+
+#### **0.5 - Configurar DNS (GoDaddy)**
+
+```bash
+# Obter endereço do Load Balancer
+LB_URL=$(kubectl get svc ingress-nginx-controller -n ingress-nginx -o jsonpath='{.status.loadBalancer.ingress[0].hostname}')
+
+echo "Load Balancer URL: $LB_URL"
+```
+
+**Configurar no GoDaddy:**
+
+1. Acesse o painel do GoDaddy (https://dcc.godaddy.com/manage/dns)
+2. Selecione seu domínio (ex: adm-ops.online)
+3. Adicione um registro CNAME:
+   - **Tipo:** CNAME
+   - **Nome:** vproapp (ou subdomínio desejado)
+   - **Valor:** Cole o Load Balancer URL obtido acima
+   - **TTL:** 600 (10 minutos)
+4. Salve as alterações
+
+**Aguarde propagação DNS (5-30 minutos)**
+
+```bash
+# Testar resolução DNS
+nslookup vproapp.adm-ops.online
+
+# Ou
+dig vproapp.adm-ops.online
+```
+
+**Alternativa - Usar Route53 (AWS):**
+
+Se preferir gerenciar DNS na AWS:
+
+```bash
+# Criar hosted zone no Route53
+aws route53 create-hosted-zone --name adm-ops.online --caller-reference $(date +%s)
+
+# Obter nameservers e atualizar no GoDaddy
+aws route53 get-hosted-zone --id SEU_ZONE_ID
+
+# Criar registro CNAME automaticamente
+aws route53 change-resource-record-sets \
+    --hosted-zone-id SEU_ZONE_ID \
+    --change-batch '{
+      "Changes": [{
+        "Action": "CREATE",
+        "ResourceRecordSet": {
+          "Name": "vproapp.adm-ops.online",
+          "Type": "CNAME",
+          "TTL": 300,
+          "ResourceRecords": [{"Value": "'$LB_URL'"}]
+        }
+      }]
+    }'
+```
+
+---
 
 ### **Passo 1: Criar o Secret para Credenciais**
 
@@ -539,14 +677,34 @@ kubectl get ingress
 
 ## 🧹 Limpeza (Remover tudo)
 
+### **Remover aplicação:**
 ```bash
 kubectl delete -f kubedefs/
 ```
+
+### **Deletar cluster Kops (ATENÇÃO: Remove todos os recursos AWS):**
+```bash
+# Deletar cluster
+kops delete cluster --name=kubepro.adm-ops.online --yes
+
+# Remover bucket S3 (opcional)
+aws s3 rb s3://kops-state-bucket-seu-nome --force
+```
+
+**Recursos AWS removidos:**
+- ❌ EC2 Instances
+- ❌ VPC e Subnets
+- ❌ Auto Scaling Groups
+- ❌ Load Balancers
+- ❌ Security Groups
+- ❌ EBS Volumes
+- ❌ Route53 records
 
 ---
 
 ## 📚 Conceitos Aprendidos
 
+### **Kubernetes:**
 ✅ **Deployments:** Gerenciamento de pods e replicação  
 ✅ **Services:** Comunicação entre pods via DNS interno  
 ✅ **Secrets:** Armazenamento seguro de credenciais  
@@ -556,16 +714,36 @@ kubectl delete -f kubedefs/
 ✅ **InitContainers:** Preparação de ambiente antes do container principal  
 ✅ **Environment Variables:** Configuração de aplicações  
 
+### **AWS + Kops:**
+✅ **Kops:** Provisionamento de clusters Kubernetes na AWS  
+✅ **EC2:** Instâncias para nodes do cluster  
+✅ **VPC:** Rede isolada para o cluster  
+✅ **ELB:** Load Balancer para Ingress  
+✅ **EBS:** Volumes para persistência  
+✅ **DNS:** Integração GoDaddy com AWS ELB  
+✅ **S3:** Armazenamento do state do Kops  
+✅ **Auto Scaling Groups:** Escalabilidade automática  
+✅ **Security Groups:** Firewall e segurança de rede  
+
 ---
 
 ## 🎯 Próximos Passos
 
+### **Kubernetes:**
 - Implementar Horizontal Pod Autoscaler (HPA)
 - Adicionar Liveness e Readiness Probes
 - Configurar Monitoring com Prometheus/Grafana
 - Implementar CI/CD com GitOps (ArgoCD/Flux)
 - Adicionar Network Policies para segurança
 - Configurar backup automático do MySQL
+
+### **AWS:**
+- Implementar Multi-AZ para alta disponibilidade
+- Configurar AWS CloudWatch para logs e métricas
+- Adicionar AWS WAF no Load Balancer
+- Implementar AWS Backup para EBS
+- Configurar AWS Certificate Manager (ACM) para HTTPS
+- Otimizar custos com Spot Instances
 
 ---
 
